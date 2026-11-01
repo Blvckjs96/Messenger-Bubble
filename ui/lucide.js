@@ -3,7 +3,6 @@
 // Only the icons this app uses are included. Usage: <span data-icon="name"></span>
 (function () {
   const ICONS = {
-    'message-circle': '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />',
     'mouse-pointer-click': '<path d="M14 4.1 12 6" /><path d="m5.1 8-2.9-.8" /><path d="m6 12-1.9 2" /><path d="M7.2 2.2 8 5.1" /><path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z" />',
     'command': '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />',
     'arrow-down-to-line': '<path d="M12 17V3" /><path d="m6 11 6 6 6-6" /><path d="M19 21H5" />',

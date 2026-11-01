@@ -416,6 +416,7 @@ function createBubbleWindow() {
     transparent: true,
     backgroundColor: '#00000000',
     hasShadow: false,
+    roundedCorners: false,
     resizable: false,
     minimizable: false,
     maximizable: false,

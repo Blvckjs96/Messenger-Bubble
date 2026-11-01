@@ -16,11 +16,11 @@
   ],
   "license": "MIT",
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "^44.10.1",
+    "electron-builder": "^26.18.0"
   },
   "allowScripts": {
-    "electron@33.4.11": true
+    "electron@44.10.1": true
   },
   "build": {
     "appId": "com.jason.messenger-bubble",
@@ -39,7 +39,10 @@
     "mac": {
       "category": "public.app-category.social-networking",
       "icon": "icon.icns",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "identity": null
     }
   }
