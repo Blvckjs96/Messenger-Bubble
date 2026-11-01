@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+  <title>Welcome to Messenger-Bubble</title>
+  <link rel="stylesheet" href="welcome.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="disc" aria-hidden="true"><span data-icon="message-circle" data-stroke="2.1"></span></div>
+    <h1>Messenger-Bubble</h1>
+    <p class="lede">Messenger, one click away from any app.</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="h-bubble">
+      <h2 id="h-bubble">The bubble</h2>
+      <ul class="group">
+        <li><span class="ico" data-icon="mouse-pointer-click"></span><span class="label">Open or close the quick panel</span><span class="hint">Click</span></li>
+        <li><span class="ico" data-icon="command"></span><span class="label">Quick panel from any app</span><span class="keys" id="shortcut-keys"></span></li>
+        <li><span class="ico" data-icon="minimize-2"></span><span class="label">Back to the bubble</span><span class="keys"><kbd>esc</kbd></span></li>
+        <li><span class="ico" data-icon="ellipsis"></span><span class="label">More options</span><span class="hint">Right-click</span></li>
+        <li><span class="ico" data-icon="arrow-down-to-line"></span><span class="label">Hide the bubble for now</span><span class="hint">Drag to bottom</span></li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="h-keys">
+      <h2 id="h-keys">In the full window</h2>
+      <ul class="group">
+        <li><span class="ico" data-icon="square-pen"></span><span class="label">New message</span><span class="keys"><kbd>⌘</kbd><kbd>N</kbd></span></li>
+        <li><span class="ico" data-icon="list-ordered"></span><span class="label">Jump to conversation</span><span class="keys"><kbd>⌘</kbd><kbd>1</kbd><span class="to">–</span><kbd>9</kbd></span></li>
+        <li><span class="ico" data-icon="panel-left"></span><span class="label">Toggle sidebar</span><span class="keys"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>S</kbd></span></li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="h-know">
+      <h2 id="h-know">Good to know</h2>
+      <ul class="group notes">
+        <li><span class="ico" data-icon="bell-ring"></span><span class="label">Native notifications that respect Focus and Do Not Disturb.</span></li>
+        <li><span class="ico" data-icon="eye-off"></span><span class="label">Sharing your screen? Turn on <b>Hide Bubble in Full Screen &amp; Screen Sharing</b> in the Bubble menu.</span></li>
+        <li><span class="ico" data-icon="key-round"></span><span class="label">Quit with <kbd>⌘</kbd><kbd>Q</kbd> to keep your session signed in.</span></li>
+        <li><span class="ico" data-icon="zap"></span><span class="label">Saves battery by slowing down in the background.</span></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <button id="start">Get Started</button>
+  </footer>
+
+  <script src="lucide.js"></script>
+  <script src="welcome.js"></script>
+</body>
+</html>

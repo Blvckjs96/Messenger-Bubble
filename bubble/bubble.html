@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'">
+  <link rel="stylesheet" href="bubble.css">
+</head>
+<body>
+  <div id="bubble" role="button" aria-label="Messenger-Bubble">
+    <span class="glass-light" aria-hidden="true"></span>
+    <span class="glyph glyph-chat" data-icon="message-circle" data-stroke="2.1"></span>
+    <span class="glyph glyph-hide" data-icon="eye-off" data-stroke="2.1"></span>
+  </div>
+  <div id="badge" hidden></div>
+  <script src="../ui/lucide.js"></script>
+  <script src="bubble.js"></script>
+</body>
+</html>

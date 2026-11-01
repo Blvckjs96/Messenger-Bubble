@@ -1,30 +1,46 @@
 {
-  "name": "messenger-app",
-  "version": "1.3.0",
-  "description": "Standalone Facebook Messenger app for macOS",
+  "name": "messenger-bubble",
+  "productName": "Messenger-Bubble",
+  "version": "1.4.0",
+  "description": "Messenger for macOS with an Android-style floating chat bubble. Fork of messenger-mac by Stefan Minch.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test test/",
     "build": "electron-builder --mac"
   },
-  "author": "Stefan",
+  "author": "Jason (fork maintainer, floating bubble); original app by Stefan Minch",
+  "contributors": [
+    "Stefan Minch (original messenger-mac)",
+    "Jason (floating bubble feature)"
+  ],
   "license": "MIT",
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
   },
+  "allowScripts": {
+    "electron@33.4.11": true
+  },
   "build": {
-    "appId": "com.stefan.messenger",
-    "productName": "MessengerApp",
+    "appId": "com.jason.messenger-bubble",
+    "afterPack": "scripts/adhoc-sign.js",
+    "productName": "Messenger-Bubble",
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "bubble/**",
+      "ui/**",
+      "package.json",
+      "LICENSE",
+      "!**/.impeccable/**"
+    ],
     "mac": {
       "category": "public.app-category.social-networking",
       "icon": "icon.icns",
       "target": ["dmg", "zip"],
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "notarize": {
-        "teamId": "X5F8PB64J5"
-      }
+      "identity": null
     }
   }
 }

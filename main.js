@@ -1,34 +1,103 @@
-const { app, BrowserWindow, shell, Menu, session, dialog, net } = require('electron');
+const { app, BrowserWindow, shell, Menu, session, dialog, net, ipcMain, screen, globalShortcut, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { UnreadTracker, formatBadge } = require('./lib/badge');
+const { NotificationDeduper } = require('./lib/notify-dedupe');
+const { snapToEdge, isInHideZone, panelBounds, ensureOnScreen, clampToArea } = require('./lib/geometry');
 
 const CURRENT_VERSION = app.getVersion();
-const GITHUB_REPO = 'stefanminch/messenger-mac';
+const GITHUB_REPO = getGithubRepo();
+
+const BUBBLE_SIZE = 60;
+const FULL_SIZE = { width: 1200, height: 800 };
+const MINI_SIZE = { width: 360, height: 520 };
+// If the title has not been readable for this long, stop trusting the last number
+const TITLE_STALE_MS = 30000;
+const SHORTCUT_CHOICES = [
+  { label: 'Cmd + Shift + Space', accelerator: 'CommandOrControl+Shift+Space' },
+  { label: 'Ctrl + Option + Space', accelerator: 'Control+Alt+Space' },
+  { label: 'Cmd + Shift + M', accelerator: 'CommandOrControl+Shift+M' },
+  { label: 'Off', accelerator: '' }
+];
 
 // Set app data path explicitly
-app.setPath('userData', path.join(app.getPath('appData'), 'MessengerApp'));
+app.setPath('userData', path.join(app.getPath('appData'), 'Messenger-Bubble'));
+
+// One Messenger session only: a second launch focuses the running app
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+}
 
 let mainWindow;
+let bubbleWindow;
+
+// 'hidden' (bubble only) | 'mini' (quick panel next to the bubble) | 'full'
+let mode = 'hidden';
+let isQuitting = false;
+let loggedIn = false;
+let mainFullScreen = false;
+let bubbleTempHidden = false;
+let dragStartPosition = null;
+let compactCssKey = null;
+let zoomBeforeMini = null;
+let shortcutError = null;
+let lastTitleParsedAt = Date.now();
+
+const unread = new UnreadTracker();
+const deduper = new NotificationDeduper({ windowMs: 5000 });
+const nativeNotifications = new Map();
 
 // Settings file path
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+const bubbleLogPath = path.join(app.getPath('userData'), 'bubble.log');
 
-// Generate unique install ID
-function generateInstallId() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-  });
+const DEFAULT_SETTINGS = {
+  sidebarVisible: true,
+  hasSeenWelcome: false,
+  bubbleEnabled: true,
+  shortcut: 'CommandOrControl+Shift+Space',
+  showBadgeCount: true,
+  notificationSound: true,
+  notificationsMuted: false,
+  hideBubbleWhenSharing: false,
+  collapseOnBlur: false,
+  rememberPositions: true,
+  bubblePosition: null,
+  fullBounds: null,
+  miniSize: null
+};
+
+function getGithubRepo() {
+  try {
+    const pkg = require('./package.json');
+    const url = typeof pkg.repository === 'string' ? pkg.repository : (pkg.repository && pkg.repository.url);
+    const match = url && url.match(/github\.com[/:]([^/]+\/[^/.]+)/);
+    return match ? match[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function bubbleLog(msg) {
+  try {
+    fs.appendFileSync(bubbleLogPath, `${new Date().toISOString()} - ${msg}\n`);
+  } catch (e) {}
 }
 
 // Load settings
 function loadSettings() {
+  let stored = {};
   try {
     if (fs.existsSync(settingsPath)) {
-      return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      stored = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     }
   } catch (e) {}
-  return { sidebarVisible: true, hasSeenWelcome: false, installId: generateInstallId(), lastPingDate: null };
+  // Usage-tracking fields from upstream are no longer used
+  delete stored.installId;
+  delete stored.lastPingDate;
+  delete stored.countedAsUser;
+  return { ...DEFAULT_SETTINGS, ...stored };
 }
 
 // Save settings
@@ -40,14 +109,32 @@ function saveSettings(settings) {
 
 let settings = loadSettings();
 
-// Check for updates and track usage
+let saveTimer = null;
+function saveSettingsSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveSettings(settings), 500);
+}
+
+// Check for updates on the fork's GitHub releases (no usage tracking)
 function checkForUpdates(silent = false) {
+  if (!GITHUB_REPO) {
+    if (!silent) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Updates',
+        message: 'Update check is not configured.',
+        detail: 'Add your GitHub repository to package.json to enable it.'
+      });
+    }
+    return;
+  }
+
   const request = net.request({
     method: 'GET',
     url: `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
   });
 
-  request.setHeader('User-Agent', `MessengerApp/${CURRENT_VERSION}`);
+  request.setHeader('User-Agent', `Messenger-Bubble/${CURRENT_VERSION}`);
 
   request.on('response', (response) => {
     let data = '';
@@ -84,119 +171,52 @@ function checkForUpdates(silent = false) {
 
   request.on('error', () => {});
   request.end();
-
-  // Track unique daily active users (per-day counter for history)
-  const today = new Date().toISOString().split('T')[0];
-  if (settings.lastPingDate !== today) {
-    if (!settings.installId) {
-      settings.installId = generateInstallId();
-    }
-    settings.lastPingDate = today;
-    saveSettings(settings);
-
-    // Ping daily counter (e.g., daily-2025-12-26)
-    const dailyPing = net.request({
-      method: 'GET',
-      url: `https://api.counterapi.dev/v1/messenger-mac/daily-${today}/up`
-    });
-    dailyPing.on('error', () => {});
-    dailyPing.end();
-
-    // Also ping total unique users (first time only)
-    if (!settings.countedAsUser) {
-      settings.countedAsUser = true;
-      saveSettings(settings);
-      const totalPing = net.request({
-        method: 'GET',
-        url: 'https://api.counterapi.dev/v1/messenger-mac/total-users/up'
-      });
-      totalPing.on('error', () => {});
-      totalPing.end();
-    }
-  }
 }
 
 // Show welcome window on first launch
+let welcomeWindow = null;
 function showWelcomeWindow() {
-  const welcomeWindow = new BrowserWindow({
-    width: 500,
-    height: 560,
+  if (welcomeWindow) {
+    welcomeWindow.focus();
+    return;
+  }
+  welcomeWindow = new BrowserWindow({
+    width: 460,
+    height: 720,
+    useContentSize: true,
     resizable: false,
     minimizable: false,
     maximizable: false,
+    fullscreenable: false,
     alwaysOnTop: true,
     titleBarStyle: 'hiddenInset',
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
+    backgroundColor: '#00000000',
+    show: false,
     webPreferences: {
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      sandbox: true
     }
   });
 
-  const welcomeHTML = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          background: linear-gradient(135deg, #0084ff 0%, #0062cc 100%);
-          color: white;
-          padding: 40px 30px 30px;
-          -webkit-app-region: drag;
-          user-select: none;
-        }
-        h1 { font-size: 24px; margin-bottom: 8px; }
-        .subtitle { opacity: 0.9; margin-bottom: 25px; font-size: 14px; }
-        .section { background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
-        .section-title { font-weight: 600; margin-bottom: 10px; font-size: 14px; }
-        .shortcut { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; }
-        .key { background: rgba(255,255,255,0.25); padding: 4px 10px; border-radius: 6px; font-family: monospace; font-size: 12px; }
-        .feature { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; }
-        .feature-icon { font-size: 18px; }
-        button {
-          -webkit-app-region: no-drag;
-          background: white;
-          color: #0084ff;
-          border: none;
-          padding: 12px 32px;
-          border-radius: 20px;
-          font-size: 15px;
-          font-weight: 600;
-          cursor: pointer;
-          display: block;
-          margin: 20px auto 0;
-        }
-        button:hover { background: #f0f0f0; }
-      </style>
-    </head>
-    <body>
-      <h1>Welcome to Messenger for Mac</h1>
-      <p class="subtitle">Here are some features to help you get started</p>
-
-      <div class="section">
-        <div class="section-title">Keyboard Shortcuts</div>
-        <div class="shortcut"><span>New Message</span><span class="key">Cmd + N</span></div>
-        <div class="shortcut"><span>Switch Conversations</span><span class="key">Cmd + 1-9</span></div>
-        <div class="shortcut"><span>Toggle Sidebar</span><span class="key">Cmd + Shift + S</span></div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">Features</div>
-        <div class="feature"><span class="feature-icon">⚡</span><span>Power Saving - Auto-throttles when in background</span></div>
-        <div class="feature"><span class="feature-icon">💾</span><span>Persistent Login - Stay signed in between sessions</span></div>
-        <div class="feature"><span class="feature-icon">🎨</span><span>Sidebar visibility is remembered across restarts</span></div>
-      </div>
-
-      <button onclick="window.close()">Get Started</button>
-    </body>
-    </html>
-  `;
-
-  welcomeWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(welcomeHTML));
+  welcomeWindow.loadFile(path.join(__dirname, 'ui', 'welcome.html'), {
+    query: { shortcut: settings.shortcut || '' }
+  });
+  // Fit the window to its content before showing it
+  welcomeWindow.once('ready-to-show', async () => {
+    try {
+      const height = await welcomeWindow.webContents.executeJavaScript('document.documentElement.scrollHeight');
+      const { workArea } = screen.getDisplayMatching(welcomeWindow.getBounds());
+      welcomeWindow.setContentSize(460, Math.min(Math.ceil(height), workArea.height - 40));
+      welcomeWindow.center();
+    } catch (e) {}
+    welcomeWindow.show();
+  });
 
   welcomeWindow.on('closed', () => {
+    welcomeWindow = null;
     settings.hasSeenWelcome = true;
     saveSettings(settings);
   });
@@ -204,10 +224,11 @@ function showWelcomeWindow() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: FULL_SIZE.width,
+    height: FULL_SIZE.height,
     minWidth: 400,
     minHeight: 600,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -226,6 +247,10 @@ function createWindow() {
   session.defaultSession.cookies.on('changed', (event, cookie, cause, removed) => {
     const isFacebookDomain = cookie.domain.includes('facebook.com') || cookie.domain.includes('messenger.com');
     log(`Cookie: ${cookie.name} | domain: ${cookie.domain} | session: ${cookie.session} | removed: ${removed}`);
+
+    if (cookie.name === 'c_user' && isFacebookDomain) {
+      refreshLoginState();
+    }
 
     if (!removed && cookie.session && isFacebookDomain) {
       // Make session cookie persistent (expire in 1 year)
@@ -251,15 +276,29 @@ function createWindow() {
   // Apply sidebar state when page finishes loading
   mainWindow.webContents.on('did-finish-load', () => {
     setTimeout(() => applySidebarState(), 1000);
+    // A reload drops inserted CSS, so re-apply compact mode
+    compactCssKey = null;
+    if (mode === 'mini') applyCompact(true);
+    refreshLoginState();
   });
+
+  mainWindow.webContents.on('did-navigate', () => refreshLoginState());
 
   // Power saving: throttle when window is hidden/minimized/unfocused
   mainWindow.on('blur', () => {
     mainWindow.webContents.setBackgroundThrottling(true);
+    if (mode === 'mini' && settings.collapseOnBlur) {
+      // Let a click on the bubble or a context menu settle first
+      setTimeout(() => {
+        if (mainWindow && mode === 'mini' && !mainWindow.isFocused()) hideMain();
+      }, 150);
+    }
   });
 
   mainWindow.on('focus', () => {
     mainWindow.webContents.setBackgroundThrottling(false);
+    // The user is looking at Messenger now: a "count unknown" dot has been seen
+    if (unread.updateFromTitle(mainWindow.webContents.getTitle())) refreshBadges();
   });
 
   mainWindow.on('minimize', () => {
@@ -269,6 +308,28 @@ function createWindow() {
   mainWindow.on('restore', () => {
     mainWindow.webContents.setBackgroundThrottling(false);
   });
+
+  // Esc in the quick panel collapses back to the bubble.
+  // The key still reaches Messenger so it can close its own popovers.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (mode === 'mini' && input.type === 'keyDown' && input.key === 'Escape' &&
+        !input.meta && !input.control && !input.alt && !input.shift) {
+      hideMain();
+    }
+  });
+
+  mainWindow.on('enter-full-screen', () => {
+    mainFullScreen = true;
+    updateBubbleVisibility();
+  });
+
+  mainWindow.on('leave-full-screen', () => {
+    mainFullScreen = false;
+    updateBubbleVisibility();
+  });
+
+  mainWindow.on('resized', () => rememberWindowSize());
+  mainWindow.on('moved', () => rememberWindowSize());
 
   // Check if URL is a Messenger/Facebook redirect link and extract real URL
   function getExternalUrl(url) {
@@ -316,9 +377,483 @@ function createWindow() {
     }
   });
 
+  // Closing only hides the window so the chat, scroll position and drafts survive.
+  // Cmd+Q quits for real.
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      hideMain();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Floating bubble
+// ---------------------------------------------------------------------------
+
+function primaryWorkArea() {
+  return screen.getPrimaryDisplay().workArea;
+}
+
+function defaultBubblePosition() {
+  const saved = settings.rememberPositions ? settings.bubblePosition : null;
+  return ensureOnScreen(saved, BUBBLE_SIZE, screen.getAllDisplays(), primaryWorkArea());
+}
+
+function createBubbleWindow() {
+  const pos = defaultBubblePosition();
+  bubbleWindow = new BrowserWindow({
+    x: pos.x,
+    y: pos.y,
+    width: BUBBLE_SIZE,
+    height: BUBBLE_SIZE,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    // Clicking the bubble must not steal focus from the quick panel or other apps
+    focusable: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'bubble', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  bubbleWindow.setAlwaysOnTop(true, 'floating');
+  applyBubblePrivacy();
+  bubbleWindow.loadFile(path.join(__dirname, 'bubble', 'bubble.html'));
+  bubbleWindow.webContents.on('did-finish-load', () => refreshBadges());
+
+  bubbleWindow.on('closed', () => {
+    bubbleWindow = null;
+  });
+}
+
+// Follow the user across Spaces. With the privacy option on, the bubble stays
+// out of other apps' full-screen Spaces and out of screen recordings / screen sharing.
+function applyBubblePrivacy() {
+  if (!bubbleWindow) return;
+  bubbleWindow.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: !settings.hideBubbleWhenSharing,
+    skipTransformProcessType: true
+  });
+  bubbleWindow.setContentProtection(!!settings.hideBubbleWhenSharing);
+}
+
+function shouldShowBubble() {
+  return settings.bubbleEnabled && loggedIn && !bubbleTempHidden && !mainFullScreen;
+}
+
+function updateBubbleVisibility() {
+  if (!bubbleWindow) return;
+  if (shouldShowBubble()) {
+    if (!bubbleWindow.isVisible()) bubbleWindow.showInactive();
+  } else if (bubbleWindow.isVisible()) {
+    bubbleWindow.hide();
+  }
+}
+
+// Where the quick panel should anchor: the bubble, or where the bubble would be
+function bubbleAnchor() {
+  if (bubbleWindow) return bubbleWindow.getBounds();
+  const pos = defaultBubblePosition();
+  return { ...pos, width: BUBBLE_SIZE, height: BUBBLE_SIZE };
+}
+
+function saveBubblePosition() {
+  if (!bubbleWindow || !settings.rememberPositions) return;
+  const [x, y] = bubbleWindow.getPosition();
+  settings.bubblePosition = { x, y };
+  saveSettingsSoon();
+}
+
+function bringBubbleBack() {
+  bubbleTempHidden = false;
+  updateBubbleVisibility();
+  createMenu();
+}
+
+function hideBubbleTemporarily() {
+  bubbleTempHidden = true;
+  if (mode === 'mini') hideMain();
+  updateBubbleVisibility();
+  createMenu();
+}
+
+ipcMain.on('bubble:move', (event, pos) => {
+  if (!bubbleWindow || event.sender !== bubbleWindow.webContents) return;
+  if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return;
+  if (!dragStartPosition) dragStartPosition = bubbleWindow.getPosition();
+  const x = Math.round(pos.x);
+  const y = Math.round(pos.y);
+  bubbleWindow.setBounds({ x, y, width: BUBBLE_SIZE, height: BUBBLE_SIZE });
+  const { workArea } = screen.getDisplayNearestPoint({ x: x + BUBBLE_SIZE / 2, y: y + BUBBLE_SIZE / 2 });
+  bubbleWindow.webContents.send('bubble:hide-zone', isInHideZone({ x, y, width: BUBBLE_SIZE, height: BUBBLE_SIZE }, workArea));
+});
+
+ipcMain.on('bubble:drag-end', (event) => {
+  if (!bubbleWindow || event.sender !== bubbleWindow.webContents) return;
+  const bounds = bubbleWindow.getBounds();
+  const { workArea } = screen.getDisplayNearestPoint({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
+  bubbleWindow.webContents.send('bubble:hide-zone', false);
+
+  if (isInHideZone(bounds, workArea)) {
+    // Put it back where the drag started so it reappears in a sensible place
+    if (dragStartPosition) {
+      bubbleWindow.setBounds({ x: dragStartPosition[0], y: dragStartPosition[1], width: BUBBLE_SIZE, height: BUBBLE_SIZE });
+    }
+    dragStartPosition = null;
+    hideBubbleTemporarily();
+    return;
+  }
+
+  dragStartPosition = null;
+  bubbleWindow.setBounds(snapToEdge(bounds, workArea));
+  saveBubblePosition();
+  if (mode === 'mini' && mainWindow && mainWindow.isVisible()) placeMiniPanel();
+});
+
+ipcMain.on('bubble:click', (event) => {
+  if (!bubbleWindow || event.sender !== bubbleWindow.webContents) return;
+  timed('bubble click', () => {
+    if (mode === 'mini' && mainWindow && mainWindow.isVisible()) hideMain();
+    else showMini();
+  });
+});
+
+ipcMain.on('bubble:context-menu', (event) => {
+  if (!bubbleWindow || event.sender !== bubbleWindow.webContents) return;
+  Menu.buildFromTemplate([
+    { label: 'Open Quick Panel', click: () => showMini() },
+    { label: 'Open Full Window', click: () => showFull() },
+    { label: 'Hide Bubble', click: () => hideBubbleTemporarily() },
+    { type: 'separator' },
+    { label: 'Mute Notifications', type: 'checkbox', checked: settings.notificationsMuted, click: () => toggleSetting('notificationsMuted') },
+    { type: 'separator' },
+    { label: `Quit ${app.name}`, click: () => app.quit() }
+  ]).popup({ window: bubbleWindow });
+});
+
+// ---------------------------------------------------------------------------
+// Main window modes: hidden (bubble) / mini (quick panel) / full
+// ---------------------------------------------------------------------------
+
+function timed(label, fn) {
+  const start = process.hrtime.bigint();
+  fn();
+  if (process.env.MESSENGER_BUBBLE_DEBUG) {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    console.log(`[timing] ${label}: ${ms.toFixed(1)}ms`);
+  }
+}
+
+function rememberWindowSize() {
+  if (!mainWindow || !settings.rememberPositions) return;
+  if (mode === 'full' && !mainWindow.isFullScreen() && !mainWindow.isMaximized()) {
+    settings.fullBounds = mainWindow.getNormalBounds();
+    saveSettingsSoon();
+  } else if (mode === 'mini') {
+    const { width, height } = mainWindow.getBounds();
+    settings.miniSize = { width, height };
+    saveSettingsSoon();
+  }
+}
+
+// Compact layout for the quick panel: keep the chat and the composer, drop the extras
+const COMPACT_CSS = `
+  [aria-label="Inbox switcher"] { display: none !important; }
+`;
+
+function applyCompact(on) {
+  if (!mainWindow) return;
+  const contents = mainWindow.webContents;
+  if (on && !compactCssKey) {
+    contents.insertCSS(COMPACT_CSS).then(key => {
+      if (mode === 'mini') compactCssKey = key;
+      else contents.removeInsertedCSS(key).catch(() => {});
+    }).catch(() => {});
+    if (zoomBeforeMini === null) {
+      zoomBeforeMini = contents.getZoomFactor();
+      contents.setZoomFactor(Math.min(zoomBeforeMini, 0.9));
+    }
+  } else if (!on) {
+    if (compactCssKey) {
+      contents.removeInsertedCSS(compactCssKey).catch(() => {});
+      compactCssKey = null;
+    }
+    if (zoomBeforeMini !== null) {
+      contents.setZoomFactor(zoomBeforeMini);
+      zoomBeforeMini = null;
+    }
+  }
+}
+
+function placeMiniPanel() {
+  const anchor = bubbleAnchor();
+  const { workArea } = screen.getDisplayNearestPoint({ x: anchor.x + anchor.width / 2, y: anchor.y + anchor.height / 2 });
+  const size = (settings.rememberPositions && settings.miniSize) || MINI_SIZE;
+  mainWindow.setBounds(panelBounds(anchor, workArea, size));
+}
+
+function showMini() {
+  if (!mainWindow) return;
+  // Logging in needs the full page
+  if (!loggedIn || mainWindow.isFullScreen()) return showFull();
+  bringBubbleBackIfHidden();
+  if (mode === 'full' && mainWindow.isVisible()) rememberWindowSize();
+  mode = 'mini';
+  mainWindow.setMinimumSize(300, 400);
+  // Show on whichever Space the user is on, above normal windows like the bubble
+  mainWindow.setVisibleOnAllWorkspaces(true, { skipTransformProcessType: true });
+  mainWindow.setAlwaysOnTop(true, 'floating');
+  placeMiniPanel();
+  applyCompact(true);
+  mainWindow.show();
+  mainWindow.focus();
+  app.focus({ steal: true });
+}
+
+function fullWindowBounds() {
+  const saved = settings.rememberPositions ? settings.fullBounds : null;
+  if (saved) {
+    const display = screen.getDisplayMatching(saved);
+    return clampToArea({ ...saved, width: Math.min(saved.width, display.workArea.width), height: Math.min(saved.height, display.workArea.height) }, display.workArea);
+  }
+  const anchor = bubbleAnchor();
+  const { workArea } = screen.getDisplayNearestPoint({ x: anchor.x, y: anchor.y });
+  const width = Math.min(FULL_SIZE.width, workArea.width);
+  const height = Math.min(FULL_SIZE.height, workArea.height);
+  return {
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    width,
+    height
+  };
+}
+
+function showFull() {
+  if (!mainWindow) return;
+  const wasFull = mode === 'full';
+  mode = 'full';
+  applyCompact(false);
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
+  mainWindow.setMinimumSize(400, 600);
+  if (!wasFull && !mainWindow.isFullScreen()) mainWindow.setBounds(fullWindowBounds());
+  mainWindow.show();
+  mainWindow.focus();
+  app.focus({ steal: true });
+}
+
+// Hide, never destroy: Messenger stays loaded, so reopening is instant and drafts survive
+function hideMain() {
+  if (!mainWindow) return;
+  if (mainWindow.isFullScreen()) {
+    mainWindow.once('leave-full-screen', () => hideMain());
+    mainWindow.setFullScreen(false);
+    return;
+  }
+  rememberWindowSize();
+  mainWindow.hide();
+  if (mode === 'mini') applyCompact(false);
+  mode = 'hidden';
+}
+
+function bringBubbleBackIfHidden() {
+  if (bubbleTempHidden) bringBubbleBack();
+}
+
+function toggleFromShortcut() {
+  if (!mainWindow) return;
+  timed('shortcut', () => {
+    if (mainWindow.isVisible() && mainWindow.isFocused()) hideMain();
+    else if (mode === 'full' && mainWindow.isVisible()) showFull();
+    else showMini();
+  });
+}
+
+function registerShortcut() {
+  globalShortcut.unregisterAll();
+  shortcutError = null;
+  if (!settings.shortcut) return;
+  let ok = false;
+  try {
+    ok = globalShortcut.register(settings.shortcut, toggleFromShortcut);
+  } catch (e) {}
+  if (!ok) {
+    shortcutError = settings.shortcut;
+    bubbleLog(`Could not register global shortcut ${settings.shortcut} (used by another app?)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Login state, unread count and notifications
+// ---------------------------------------------------------------------------
+
+async function refreshLoginState() {
+  let nowLoggedIn = false;
+  try {
+    const cookies = await session.defaultSession.cookies.get({ name: 'c_user' });
+    nowLoggedIn = cookies.some(c => c.domain.includes('messenger.com') || c.domain.includes('facebook.com'));
+  } catch (e) {}
+  if (mainWindow) {
+    const url = mainWindow.webContents.getURL();
+    if (/\/login|\/checkpoint/.test(url)) nowLoggedIn = false;
+  }
+  // Development only: exercise the bubble without signing in
+  if (!app.isPackaged && process.env.MESSENGER_BUBBLE_ASSUME_LOGIN === '1') nowLoggedIn = true;
+  if (nowLoggedIn === loggedIn) return;
+  loggedIn = nowLoggedIn;
+  if (!loggedIn) {
+    // Logged out: no bubble, no badge, no stale notifications
+    unread.reset();
+    deduper.clear();
+    closeAllNativeNotifications();
+    if (mode === 'mini') showFull();
+  }
+  updateBubbleVisibility();
+  refreshBadges();
+}
+
+function refreshBadges() {
+  const value = loggedIn ? unread.badgeValue() : 0;
+  const text = formatBadge(value, { showCount: settings.showBadgeCount });
+  if (app.dock) app.dock.setBadge(text);
+  if (bubbleWindow) bubbleWindow.webContents.send('bubble:badge', text);
+}
+
+function fromMainWindow(event) {
+  return mainWindow && event.sender === mainWindow.webContents;
+}
+
+ipcMain.on('escape-pressed', (event) => {
+  if (fromMainWindow(event) && mode === 'mini') hideMain();
+});
+
+ipcMain.on('unread-count', (event, title) => {
+  if (!fromMainWindow(event)) return;
+  // Titles during a (re)load or an offline error page are not trustworthy: keep the old badge
+  if (mainWindow.webContents.isLoading()) return;
+  if (unread.updateFromTitle(title)) {
+    lastTitleParsedAt = Date.now();
+    if (unread.badgeValue() === 0) {
+      deduper.clear();
+      closeAllNativeNotifications();
+    }
+  } else if (Date.now() - lastTitleParsedAt > TITLE_STALE_MS) {
+    // Messenger's title format may have changed: show a dot, never a stale number
+    bubbleLog(`Unread count unreadable from title: ${JSON.stringify(String(title).slice(0, 80))}`);
+    unread.degrade();
+  }
+  refreshBadges();
+});
+
+function mainWindowIsActive() {
+  return mainWindow && mainWindow.isVisible() && mainWindow.isFocused();
+}
+
+ipcMain.on('message-arrived', (event, data) => {
+  if (!fromMainWindow(event) || !data) return;
+
+  // The title normally follows within a moment; if it doesn't, show a dot instead of a number
+  setTimeout(() => {
+    if (!mainWindowIsActive() && unread.badgeValue() === 0) {
+      unread.markPossibleUnread();
+      refreshBadges();
+    }
+  }, 3000);
+
+  bringBubbleBackIfHidden();
+
+  if (settings.notificationsMuted || !Notification.isSupported()) return;
+  // The user is already looking at Messenger
+  if (mainWindowIsActive()) return;
+
+  const key = data.tag || data.title;
+  const decision = deduper.decide(key, data.body);
+  if (decision.action === 'drop') return;
+
+  const previous = nativeNotifications.get(key);
+  if (previous) previous.notification.close();
+
+  const notification = new Notification({
+    title: data.title || app.name,
+    body: decision.count > 1 ? `${decision.count} new messages · ${data.body}` : data.body,
+    silent: !settings.notificationSound
+  });
+  notification.on('click', () => {
+    showMini();
+    // Let Messenger's own handler open the conversation
+    if (data.id && mainWindow) {
+      mainWindow.webContents.executeJavaScript(
+        `window.__messengerBubbleNotificationClick && window.__messengerBubbleNotificationClick(${Number(data.id)})`
+      ).catch(() => {});
+    }
+  });
+  notification.on('close', () => {
+    const current = nativeNotifications.get(key);
+    if (current && current.notification === notification) nativeNotifications.delete(key);
+  });
+  nativeNotifications.set(key, { notification, id: data.id });
+  notification.show();
+});
+
+ipcMain.on('notification-close', (event, id) => {
+  if (!fromMainWindow(event) || !id) return;
+  for (const [key, entry] of nativeNotifications) {
+    if (entry.id === id) {
+      entry.notification.close();
+      nativeNotifications.delete(key);
+    }
+  }
+});
+
+function closeAllNativeNotifications() {
+  for (const entry of nativeNotifications.values()) entry.notification.close();
+  nativeNotifications.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Settings toggles
+// ---------------------------------------------------------------------------
+
+function toggleSetting(name) {
+  settings[name] = !settings[name];
+  saveSettings(settings);
+  if (name === 'bubbleEnabled') {
+    bubbleTempHidden = false;
+    updateBubbleVisibility();
+  }
+  if (name === 'hideBubbleWhenSharing') applyBubblePrivacy();
+  if (name === 'showBadgeCount') refreshBadges();
+  if (name === 'rememberPositions' && !settings.rememberPositions) {
+    settings.bubblePosition = null;
+    settings.fullBounds = null;
+    settings.miniSize = null;
+    saveSettings(settings);
+  }
+  if (name === 'rememberPositions' && settings.rememberPositions) saveBubblePosition();
+  createMenu();
+}
+
+function setShortcut(accelerator) {
+  settings.shortcut = accelerator;
+  saveSettings(settings);
+  registerShortcut();
+  createMenu();
 }
 
 // Toggle left sidebar visibility
@@ -443,6 +978,31 @@ function createMenu() {
       ]
     },
     {
+      label: 'Bubble',
+      submenu: [
+        { label: 'Open Quick Panel', click: () => showMini() },
+        { label: 'Open Full Window', click: () => showFull() },
+        { label: 'Bring Bubble Back', enabled: bubbleTempHidden, click: () => bringBubbleBack() },
+        { type: 'separator' },
+        { label: 'Show Bubble', type: 'checkbox', checked: settings.bubbleEnabled, click: () => toggleSetting('bubbleEnabled') },
+        {
+          label: shortcutError ? 'Quick Panel Shortcut (in use by another app)' : 'Quick Panel Shortcut',
+          submenu: SHORTCUT_CHOICES.map(choice => ({
+            label: choice.label,
+            type: 'radio',
+            checked: settings.shortcut === choice.accelerator,
+            click: () => setShortcut(choice.accelerator)
+          }))
+        },
+        { label: 'Show Unread Count', type: 'checkbox', checked: settings.showBadgeCount, click: () => toggleSetting('showBadgeCount') },
+        { label: 'Notification Sound', type: 'checkbox', checked: settings.notificationSound, click: () => toggleSetting('notificationSound') },
+        { label: 'Mute Notifications', type: 'checkbox', checked: settings.notificationsMuted, click: () => toggleSetting('notificationsMuted') },
+        { label: 'Hide Bubble in Full Screen & Screen Sharing', type: 'checkbox', checked: settings.hideBubbleWhenSharing, click: () => toggleSetting('hideBubbleWhenSharing') },
+        { label: 'Collapse Quick Panel When It Loses Focus', type: 'checkbox', checked: settings.collapseOnBlur, click: () => toggleSetting('collapseOnBlur') },
+        { label: 'Remember Bubble Position & Window Size', type: 'checkbox', checked: settings.rememberPositions, click: () => toggleSetting('rememberPositions') }
+      ]
+    },
+    {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
@@ -467,9 +1027,51 @@ function createMenu() {
   Menu.setApplicationMenu(menu);
 }
 
-app.whenReady().then(() => {
+// Keep the bubble on a connected display when monitors change
+function handleDisplayChange() {
+  if (!bubbleWindow) return;
+  const [x, y] = bubbleWindow.getPosition();
+  const pos = ensureOnScreen({ x, y }, BUBBLE_SIZE, screen.getAllDisplays(), primaryWorkArea());
+  if (pos.x !== x || pos.y !== y) {
+    bubbleWindow.setBounds({ ...pos, width: BUBBLE_SIZE, height: BUBBLE_SIZE });
+    saveBubblePosition();
+  }
+  if (mode === 'mini' && mainWindow && mainWindow.isVisible()) placeMiniPanel();
+}
+
+// Development only: lets a debugger attached with --inspect drive and inspect the bubble
+if (!app.isPackaged && process.env.MESSENGER_BUBBLE_DEBUG) {
+  global.__bubbleDebug = {
+    electron: require('electron'),
+    state: () => ({ mode, loggedIn, bubbleTempHidden, mainFullScreen, unread: unread.badgeValue(), shortcutError,
+      notifications: [...nativeNotifications.entries()].map(([key, e]) => ({ key, body: e.notification.body })) }),
+    showMini, showFull, hideMain, toggleFromShortcut
+  };
+}
+
+app.on('second-instance', () => {
+  if (mode === 'hidden') showMini();
+  else if (mainWindow) mainWindow.show();
+});
+
+app.whenReady().then(async () => {
+  if (!isPrimaryInstance) return;
+  // Packaged builds get icon.icns from electron-builder; `npm start` would show Electron's icon
+  if (app.dock && !app.isPackaged) app.dock.setIcon(path.join(__dirname, 'icon.png'));
   createMenu();
   createWindow();
+  createBubbleWindow();
+  registerShortcut();
+  createMenu();
+
+  screen.on('display-removed', handleDisplayChange);
+  screen.on('display-added', handleDisplayChange);
+  screen.on('display-metrics-changed', handleDisplayChange);
+
+  // Signed in with the bubble on: start as a bubble, Messenger loads in the background.
+  // Otherwise show the full window (e.g. to log in).
+  await refreshLoginState();
+  if (!(loggedIn && settings.bubbleEnabled)) showFull();
 
   // Show welcome window on first launch
   if (!settings.hasSeenWelcome) {
@@ -479,10 +1081,9 @@ app.whenReady().then(() => {
   // Check for updates silently on startup
   setTimeout(() => checkForUpdates(true), 5000);
 
+  // Clicking the Dock icon opens the full window
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (mainWindow) showFull();
   });
 });
 
@@ -494,5 +1095,14 @@ app.on('window-all-closed', () => {
 
 // Flush cookies before quitting
 app.on('before-quit', async () => {
+  isQuitting = true;
+  rememberWindowSize();
+  saveBubblePosition();
+  clearTimeout(saveTimer);
+  saveSettings(settings);
   await session.defaultSession.cookies.flushStore();
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });

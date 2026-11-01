@@ -1,0 +1,223 @@
+/* Floating bubble: a round Liquid Glass disc with a Lucide glyph and a system-style badge.
+   The window is 60x60 and transparent; the disc leaves room for its own shadow.
+   bubble.js feeds --mx/--my (pointer position in the disc, 0-100%) and
+   --angle/--stretch (drag direction and speed) so the glass reacts like a liquid. */
+
+:root {
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);   /* ease-out-quart */
+  --ease-pop: cubic-bezier(0.22, 1, 0.36, 1);  /* ease-out-quint */
+
+  --glass-fill: rgba(255, 255, 255, 0.5);
+  --glass-fill-hover: rgba(255, 255, 255, 0.64);
+  --glass-rim: rgba(255, 255, 255, 0.85);
+  --glass-edge: rgba(0, 0, 0, 0.14);
+  --glass-shade: rgba(0, 0, 0, 0.08);
+  --glass-light: rgba(255, 255, 255, 0.75);
+  --glass-press: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 3px 10px rgba(0, 0, 0, 0.16), 0 1px 2px rgba(0, 0, 0, 0.12);
+  --glass-shadow-lift: 0 7px 16px rgba(0, 0, 0, 0.22), 0 2px 4px rgba(0, 0, 0, 0.12);
+  --glyph: #007aff;        /* systemBlue (light) */
+  --badge: #ff3b30;        /* systemRed (light), same as the Dock badge */
+  --badge-ring: rgba(255, 255, 255, 0.95);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --glass-fill: rgba(44, 44, 48, 0.52);
+    --glass-fill-hover: rgba(62, 62, 68, 0.62);
+    --glass-rim: rgba(255, 255, 255, 0.34);
+    --glass-edge: rgba(0, 0, 0, 0.5);
+    --glass-shade: rgba(0, 0, 0, 0.22);
+    --glass-light: rgba(255, 255, 255, 0.38);
+    --glass-press: rgba(255, 255, 255, 0.42);
+    --glass-shadow: 0 3px 10px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --glass-shadow-lift: 0 7px 16px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.3);
+    --glyph: #0a84ff;      /* systemBlue (dark) */
+    --badge: #ff453a;      /* systemRed (dark) */
+    --badge-ring: rgba(30, 30, 32, 0.95);
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 60px;
+  height: 60px;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+#bubble {
+  --mx: 32%;
+  --my: 18%;
+  --angle: 0deg;
+  --stretch: 0;
+  --lift: 1;
+
+  position: absolute;
+  left: 5px;
+  top: 6px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  overflow: hidden;           /* everything inside stays a perfect circle */
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  /* Specular cap on top, soft shade at the bottom, tinted body */
+  background:
+    radial-gradient(120% 70% at 30% 8%, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 55%),
+    radial-gradient(90% 60% at 70% 110%, var(--glass-shade) 0%, transparent 70%),
+    var(--glass-fill);
+  box-shadow:
+    inset 0 0 0 0.5px var(--glass-rim),
+    inset 0 1px 1px rgba(255, 255, 255, 0.6),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.06),
+    0 0 0 0.5px var(--glass-edge),
+    var(--glass-shadow);
+  /* Liquid stretch along the drag direction, then back to round */
+  transform:
+    rotate(var(--angle))
+    scale(calc(var(--lift) * (1 + var(--stretch))), calc(var(--lift) * (1 - var(--stretch) * 0.6)))
+    rotate(calc(var(--angle) * -1));
+  transition:
+    opacity 240ms var(--ease-out),
+    transform 260ms var(--ease-out),
+    box-shadow 200ms var(--ease-out),
+    background-color 200ms var(--ease-out);
+}
+
+/* Light that follows the pointer across the glass */
+.glass-light {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at var(--mx) var(--my), var(--glass-light) 0%, rgba(255, 255, 255, 0) 46%);
+  opacity: 0.35;
+  mix-blend-mode: plus-lighter;
+  pointer-events: none;
+  z-index: -1;
+  transition: opacity 200ms var(--ease-out);
+}
+
+/* Refraction rim: a thin bright arc that turns towards the light */
+#bubble::after {
+  content: '';
+  position: absolute;
+  inset: 0.5px;
+  border-radius: 50%;
+  background: conic-gradient(from 200deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, 0) 68%, rgba(255, 255, 255, 0.45));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+  pointer-events: none;
+  transition: opacity 200ms var(--ease-out);
+}
+
+.glyph {
+  grid-area: 1 / 1;
+  width: 24px;
+  height: 24px;
+  color: var(--glyph);
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-out), transform 220ms var(--ease-out);
+}
+
+.glyph svg { display: block; width: 100%; height: 100%; }
+.glyph-hide { opacity: 0; transform: scale(0.7); color: var(--badge); }
+
+/* Hover: the glass brightens and catches the pointer light */
+body.hover:not(.dragging) #bubble {
+  --lift: 1.05;
+  background-color: var(--glass-fill-hover);
+}
+body.hover .glass-light { opacity: 1; }
+
+/* Press: the glass gives way under the finger and glows where it's touched */
+body.pressed:not(.dragging) #bubble { --lift: 0.94; }
+body.pressed .glass-light { opacity: 1; --glass-light: var(--glass-press); }
+body.pressed .glyph-chat { transform: scale(0.94); }
+
+/* Drag: lifted off the desktop, stretching with the motion */
+body.dragging #bubble {
+  --lift: 1.08;
+  box-shadow:
+    inset 0 0 0 0.5px var(--glass-rim),
+    inset 0 1px 1px rgba(255, 255, 255, 0.6),
+    0 0 0 0.5px var(--glass-edge),
+    var(--glass-shadow-lift);
+  background-color: var(--glass-fill-hover);
+  cursor: grabbing;
+  transition:
+    opacity 240ms var(--ease-out),
+    transform 90ms linear,
+    box-shadow 200ms var(--ease-out);
+}
+body.dragging .glass-light { opacity: 0.8; }
+
+body.idle #bubble { opacity: 0.7; }
+
+/* Dropping here hides the bubble: show the eye-off glyph and shrink */
+body.hide-zone #bubble { --lift: 0.84; opacity: 0.75; }
+body.hide-zone .glyph-chat { opacity: 0; transform: scale(0.7); }
+body.hide-zone .glyph-hide { opacity: 1; transform: none; }
+body.hide-zone #badge { opacity: 0; }
+
+#badge {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--badge);
+  box-shadow: 0 0 0 1.5px var(--badge-ring), 0 1px 2px rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 19px;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-out);
+  animation: badge-in 220ms var(--ease-pop);
+}
+
+/* Count unknown: a dot, distinguishable by shape as well as colour */
+#badge.dot {
+  min-width: 11px;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  right: 6px;
+  top: 6px;
+}
+
+body.dragging #badge { opacity: 0; }
+
+@keyframes badge-in {
+  from { transform: scale(0.5); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #bubble, .glyph, #badge, .glass-light { transition: none; animation: none; }
+  #bubble,
+  body.hover:not(.dragging) #bubble,
+  body.pressed:not(.dragging) #bubble,
+  body.dragging #bubble,
+  body.hide-zone #bubble { transform: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass-fill: #f5f5f7; --glass-fill-hover: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --glass-fill: #2c2c2e; --glass-fill-hover: #3a3a3c; }
+  }
+  .glass-light { display: none; }
+  body.idle #bubble { opacity: 0.85; }
+}
