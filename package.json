@@ -1,7 +1,7 @@
 {
   "name": "messenger-bubble",
   "productName": "Messenger-Bubble",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Messenger for macOS with an Android-style floating chat bubble. Fork of messenger-mac by Stefan Minch.",
   "main": "main.js",
   "scripts": {

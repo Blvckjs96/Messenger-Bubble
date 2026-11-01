@@ -26,6 +26,7 @@ No coding needed: open the DMG, drag the app into Applications, then follow [the
 - **Right-click** the bubble for Quick Panel, Full Window, Hide Bubble, Mute Notifications and Quit.
 - **Drag to the bottom** of the screen to hide the bubble for now. It comes back when a message arrives, with the shortcut, or from *Bubble → Bring Bubble Back*.
 - **Remembers** the bubble position and window sizes across restarts.
+- **Calls**: voice and video calls open in their own window; incoming calls pop the panel open even when you're in another app.
 
 Only one Messenger session runs: the bubble is a tiny local window that only sends commands, and the quick panel *is* the main Messenger window, shrunk and placed next to the bubble.
 
@@ -117,6 +118,8 @@ These only work when running from source (`npm start`), never in a packaged app:
 - The unread count comes from Messenger's page title. If Meta changes it, the badge falls back to a dot and logs to `~/Library/Application Support/Messenger-Bubble/bubble.log`. It will never show a wrong number.
 - macOS doesn't tell apps when another app is full screen or when the screen is being shared. The privacy option instead keeps the bubble out of screen captures and other apps' full-screen Spaces.
 - The bubble's Liquid Glass look is drawn with CSS. Electron can't blur the desktop behind a custom-shaped window.
+- Because builds are ad-hoc signed, macOS may ask again for camera, microphone or screen-recording permission after you install a new version.
+- Incoming calls are detected from Messenger's ringtone and call notifications. If Meta changes how calls ring, the panel may not open by itself (the call still rings).
 
 ## Credits
 
@@ -133,7 +136,12 @@ No. It's an unofficial wrapper around messenger.com, not affiliated with Meta/Fa
 No. You log in directly on messenger.com inside the app. There's no server of ours and no tracking.
 
 ### Does it support voice/video calls?
-Yes, in the full window. For calls, long chats or big files, use *Open Full Window* from the bubble's right-click menu.
+Yes. Calls use Messenger's own calling on messenger.com and open in their own window:
+
+- **Camera and microphone**: macOS asks for permission the first time you call.
+- **Incoming calls**: if Messenger is collapsed to the bubble, the app opens the panel and bounces the Dock icon when it rings, so you don't miss it.
+- **Screen sharing**: choose a screen or window in the macOS picker. macOS asks for *Screen & System Audio Recording* permission the first time.
+- **Call window**: comes to the front, and the quick panel collapses so it doesn't cover the call.
 
 ### My login isn't persisting?
 Quit with `Cmd + Q` (closing the window only hides it) so the session is saved.

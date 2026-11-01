@@ -1,5 +1,18 @@
 # Release Notes
 
+## v1.4.1 (2026-11-02)
+
+### Calls
+- **Incoming calls are never missed** - When Messenger is collapsed to the bubble, a ringing call opens the panel and bounces the Dock icon
+- **Screen sharing in calls** - Share a screen or window through the macOS picker
+- **Call window comes to the front** - The quick panel collapses so it doesn't cover the call
+- **Better call compatibility** - The app presents itself as regular Chrome so Messenger doesn't refuse calls
+
+### Other
+- Builds no longer leave a second copy of the app in dist/ for Spotlight to find
+
+---
+
 ## v1.4.0 — Messenger-Bubble (2026-11-01)
 
 First release of the **Messenger-Bubble** fork (floating bubble by Jason, on top of Stefan Minch's messenger-mac).

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Menu, session, dialog, net, ipcMain, screen, globalShortcut, Notification } = require('electron');
+const { app, BrowserWindow, shell, Menu, session, dialog, net, ipcMain, screen, globalShortcut, Notification, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { UnreadTracker, formatBadge } = require('./lib/badge');
@@ -22,6 +22,10 @@ const SHORTCUT_CHOICES = [
 
 // Set app data path explicitly
 app.setPath('userData', path.join(app.getPath('appData'), 'Messenger-Bubble'));
+
+// Present as regular Chrome: Messenger can refuse calls in browsers it doesn't recognise,
+// and the default user agent advertises Electron and the app name.
+app.userAgentFallback = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome.split('.')[0]}.0.0.0 Safari/537.36`;
 
 // One Messenger session only: a second launch focuses the running app
 const isPrimaryInstance = app.requestSingleInstanceLock();
@@ -349,32 +353,61 @@ function createWindow() {
     return url.includes('messenger.com') && !url.includes('l.messenger.com');
   }
 
-  // Handle external links - open in default browser
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    const externalUrl = getExternalUrl(url);
-    if (externalUrl) {
-      shell.openExternal(externalUrl);
-      return { action: 'deny' };
-    }
-    if (!isInternalUrl(url)) {
-      shell.openExternal(url);
-      return { action: 'deny' };
-    }
-    return { action: 'allow' };
+  // Keep Messenger in the app and send everything else to the default browser.
+  // Also applied to call windows Messenger opens itself.
+  function guardLinks(contents) {
+    // Handle external links - open in default browser
+    contents.setWindowOpenHandler(({ url }) => {
+      const externalUrl = getExternalUrl(url);
+      if (externalUrl) {
+        shell.openExternal(externalUrl);
+        return { action: 'deny' };
+      }
+      if (!isInternalUrl(url)) {
+        shell.openExternal(url);
+        return { action: 'deny' };
+      }
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 640, minWidth: 360, minHeight: 300 } };
+    });
+
+    // Handle navigation to external sites
+    contents.on('will-navigate', (event, url) => {
+      const externalUrl = getExternalUrl(url);
+      if (externalUrl) {
+        event.preventDefault();
+        shell.openExternal(externalUrl);
+        return;
+      }
+      if (!isInternalUrl(url)) {
+        event.preventDefault();
+        shell.openExternal(url);
+      }
+    });
+  }
+
+  guardLinks(mainWindow.webContents);
+
+  // Calls open in their own window: bring it forward
+  mainWindow.webContents.on('did-create-window', (child, { url }) => {
+    guardLinks(child.webContents);
+    if (isCallUrl(url)) showCallWindow(child);
   });
 
-  // Handle navigation to external sites
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const externalUrl = getExternalUrl(url);
-    if (externalUrl) {
-      event.preventDefault();
-      shell.openExternal(externalUrl);
+  // A ringtone is the one sound that keeps playing: if hidden Messenger stays
+  // audible for a while, someone is calling. Short message sounds don't trigger it.
+  mainWindow.webContents.on('audio-state-changed', (event) => {
+    clearTimeout(ringTimer);
+    if (!event.audible) {
+      ringSurfaced = false;
       return;
     }
-    if (!isInternalUrl(url)) {
-      event.preventDefault();
-      shell.openExternal(url);
-    }
+    if (ringSurfaced) return;
+    ringTimer = setTimeout(() => {
+      if (mainWindow && mainWindow.webContents.isCurrentlyAudible() && !mainWindowIsActive()) {
+        ringSurfaced = true;
+        surfaceIncomingCall('ringing');
+      }
+    }, RING_MS);
   });
 
   // Closing only hides the window so the chat, scroll position and drafts survive.
@@ -389,6 +422,55 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Calls
+// ---------------------------------------------------------------------------
+
+const RING_MS = 1500;
+// Call notifications, in English and Vietnamese
+const CALL_TEXT = /\b(calling|incoming call|video call|audio call|voice call)\b|cuộc gọi|đang gọi|gọi video|gọi thoại/i;
+let ringTimer = null;
+let ringSurfaced = false;
+
+function isCallUrl(url) {
+  return /\/(groupcall|videocall|calls?)(\/|\?|$)/i.test(url || '');
+}
+
+// Make sure an incoming call is seen even when Messenger is collapsed to the bubble
+function surfaceIncomingCall(reason) {
+  if (!mainWindow || mainWindowIsActive()) return;
+  bubbleLog(`Incoming call surfaced (${reason})`);
+  if (mode === 'full') showFull();
+  else showMini();
+  if (app.dock) app.dock.bounce('critical');
+}
+
+function showCallWindow(child) {
+  // The quick panel floats above normal windows; collapse it so it doesn't cover the call
+  if (mode === 'mini') hideMain();
+  child.show();
+  child.focus();
+  app.focus({ steal: true });
+}
+
+// Screen sharing in calls. macOS shows its own picker; the handler is the fallback
+// for systems without it. Only Messenger may ask.
+function setupScreenSharing() {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    let host = '';
+    try {
+      host = new URL(request.securityOrigin || (request.frame && request.frame.url) || '').hostname;
+    } catch (e) {}
+    if (!/(^|\.)messenger\.com$/.test(host)) {
+      callback({});
+      return;
+    }
+    desktopCapturer.getSources({ types: ['screen'] })
+      .then(sources => callback(sources.length ? { video: sources[0] } : {}))
+      .catch(() => callback({}));
+  }, { useSystemPicker: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +861,8 @@ ipcMain.on('message-arrived', (event, data) => {
 
   bringBubbleBackIfHidden();
 
+  if (CALL_TEXT.test(`${data.title} ${data.body}`)) surfaceIncomingCall('notification');
+
   if (settings.notificationsMuted || !Notification.isSupported()) return;
   // The user is already looking at Messenger
   if (mainWindowIsActive()) return;
@@ -1062,6 +1146,7 @@ app.whenReady().then(async () => {
   createMenu();
   createWindow();
   createBubbleWindow();
+  setupScreenSharing();
   registerShortcut();
   createMenu();
 
