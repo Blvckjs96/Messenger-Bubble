@@ -56,7 +56,7 @@ Everything lives in the **Bubble** menu:
 
 ## Install
 
-1. Download the latest `Messenger-Bubble-x.y.z-arm64.dmg` from this repository's **Releases** page.
+1. Download the latest `Messenger-Bubble-x.y.z-arm64.dmg` from the [Releases page](https://github.com/Blvckjs96/Messenger-Bubble/releases) (Apple Silicon Macs).
 2. Open the DMG.
 3. Drag **Messenger-Bubble** into **Applications**.
 4. Open it once. macOS will block it because it isn't notarized:
@@ -75,8 +75,8 @@ The bubble appears after you log in to Messenger in the full window.
 Requires Node.js 20 or 22 (LTS) and npm.
 
 ```bash
-git clone <this repository's URL>
-cd messenger-bubble
+git clone https://github.com/Blvckjs96/Messenger-Bubble.git
+cd Messenger-Bubble
 
 npm install
 npm test        # unit tests for badge, notification and placement logic

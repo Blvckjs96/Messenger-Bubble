@@ -17,7 +17,7 @@ First release of the **Messenger-Bubble** fork (floating bubble by Jason, on top
 ### Changes
 - Renamed to Messenger-Bubble (bundle ID `com.jason.messenger-bubble`, data in `~/Library/Application Support/Messenger-Bubble`)
 - Removed the upstream daily usage counter (no tracking at all)
-- Update check points to this fork's releases (once the repository is set in package.json)
+- Update check points to this fork's releases (github.com/Blvckjs96/Messenger-Bubble)
 - Closing the window hides it; Cmd+Q quits
 - Only one instance can run, so there is only ever one Messenger session
 - Builds are ad-hoc signed (not notarized) for now

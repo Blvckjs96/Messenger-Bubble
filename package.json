@@ -15,6 +15,14 @@
     "Jason (floating bubble feature)"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/Blvckjs96/Messenger-Bubble#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Blvckjs96/Messenger-Bubble.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Blvckjs96/Messenger-Bubble/issues"
+  },
   "devDependencies": {
     "electron": "^44.10.1",
     "electron-builder": "^26.18.0"
