@@ -6,6 +6,14 @@ Messenger-Bubble is a fork of [messenger-mac](https://github.com/stefanminch/mes
 
 <img src="icon.png" width="128" alt="Messenger-Bubble">
 
+## Download
+
+[![Download Messenger-Bubble for Mac](https://img.shields.io/badge/Download%20for%20Mac-v1.4.0%20(DMG)-0a84ff?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Blvckjs96/Messenger-Bubble/releases/download/v1.4.0/Messenger-Bubble-1.4.0-arm64.dmg)
+
+**[Download Messenger-Bubble v1.4.0 (DMG)](https://github.com/Blvckjs96/Messenger-Bubble/releases/download/v1.4.0/Messenger-Bubble-1.4.0-arm64.dmg)** · Macs with Apple silicon (M1 or newer) · [All releases](https://github.com/Blvckjs96/Messenger-Bubble/releases)
+
+No coding needed: open the DMG, drag the app into Applications, then follow [the first-launch step](#install) once.
+
 ## The bubble
 
 - **Floating bubble**: a small Liquid Glass bubble that stays above your apps on every Space. Drag it anywhere; it sticks to the nearest side of the screen.
