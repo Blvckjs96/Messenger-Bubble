@@ -33,6 +33,7 @@
   "build": {
     "appId": "com.jason.messenger-bubble",
     "afterPack": "scripts/adhoc-sign.js",
+    "afterAllArtifactBuild": "scripts/clean-unpacked.js",
     "productName": "Messenger-Bubble",
     "files": [
       "main.js",
